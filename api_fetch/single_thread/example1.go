@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"gopkg.in/resty.v1"
-	"sync"
 )
 
 const (
@@ -63,64 +62,18 @@ func GetAllCurrencies() (map[string]float64, error) {
 		return nil, err
 	}
 
-	// Creamos el canal encargado de manejar las respuestas de cada goroutine.
-	c := make(chan *CurrencyConversion)
-	// Cierra el canal al finalizar la función actual.
-	defer close(c)
-
 	result := make(map[string]float64)
 
-	// Estructura que permite controlar la cantidad de elementos agregados y pendientes por procesar.
-	var wg sync.WaitGroup
-
-	// Antes de comenzar a procesar, disparamos la goroutine de control para evitar que lleguen resultados
-	// antes de tener disponible el proceso que las controla. Esperamos tantos resultados como elementos
-	// presentes en el slice de sites.
-	go HandleResults(c, &wg, len(*sites), result)
-
 	for _, site := range *sites {
-		// Sumamos uno al WaitGroup
-		wg.Add(1)
 		// Mandamos a procesar cada uno de los siteIds que tenemos (20 al momento de escribir este código).
-		go ProcessSiteId(c, site.Id)
+		convRate, err := GetCurrencyConversion(site.Id, CURRENCY_USD)
+		if err == nil && convRate != nil {
+			result[convRate.From] = convRate.Ratio
+		}
 	}
-
-	// El proceso no avanza de esta línea hasta que el WaitGroup tenga un count de 0 (terminen todas las goroutines que lanzamos).
-	wg.Wait()
 
 	// Retornamos el resultado final.
 	return result, nil
-}
-
-func HandleResults(c chan *CurrencyConversion, wg *sync.WaitGroup, loop int, m map[string]float64) {
-	// Si hay parámetros en nil o inválidos, salimos.
-	if wg == nil || loop == 0 {
-		return
-	}
-
-	var conv *CurrencyConversion
-
-	for i := 0; i < loop; i++ {
-		// Escuchamos del canal. El proceso se detiene en esta línea hasta que llega algo al canal. Lo hacemos 20 veces.
-		conv = <-c
-		if conv != nil {
-			// Si el elemento que nos llega al canal no es nil, entonces lo agregamos al mapa de resultados.
-			m[conv.From] = conv.Ratio
-		}
-		// Notificamos que se ha procesado otro elemento del WaitGroup.
-		wg.Done()
-	}
-}
-
-// Por cada uno de los siteIds que tenemos, ejecuta la búsqueda de este site y su conversión a USDs.
-// Todas las respuestas van directamente al canal. Si hay un error, se ignora este site en los resultados.
-func ProcessSiteId(c chan *CurrencyConversion, siteId string) {
-	convRate, err := GetCurrencyConversion(siteId, CURRENCY_USD)
-	if err != nil {
-		c <- nil
-		return
-	}
-	c <- convRate
 }
 
 // Busca el ratio de conversión entre dos monedas haciendo uso de la API de currencies de MercadoLibre.
@@ -145,11 +98,12 @@ func GetCurrencyConversion(siteId, to string) (*CurrencyConversion, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(fmt.Sprintf("Convertion rate from '%s' to '%s' successfully obtained.", site.DefaultCurrencyId, to))
 
 	// Agregamos información de que moneda de origen y a que moneda de destino acabamos de convertir.
 	conversion.From = site.DefaultCurrencyId
 	conversion.To = to
+
+	fmt.Println(fmt.Sprintf("Convertion rate from '%s' to '%s' successfully obtained.", site.DefaultCurrencyId, to))
 
 	return &conversion, nil
 }
